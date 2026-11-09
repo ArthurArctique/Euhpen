@@ -1,0 +1,72 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bibliothèques système (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
+
+      - name: Tests
+        run: cargo test --locked
+
+      - name: Compilation
+        run: cargo build --release --locked --bins
+
+      - name: Compilation avec la chaîne du lanceur (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnullvm --profile minimal --no-self-update
+          cargo +stable-x86_64-pc-windows-gnullvm build --release --locked --bins
+
+      - name: Installateur (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo +stable-x86_64-pc-windows-gnullvm test --locked --features installer --lib setup::
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/creer-installateur.ps1
+
+      - name: Installateur (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cargo test --locked --features installer --lib setup::
+          bash packaging/macos/creer-installateur.sh
+
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Installation
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt pytest ruff
+
+      - name: Style
+        run: python -m ruff check euhpen tests
+
+      - name: Tests
+        run: python -m pytest -q

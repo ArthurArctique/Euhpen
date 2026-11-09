@@ -1,0 +1,68 @@
+name: release
+
+# Pousser un tag vX.Y.Z construit les deux installateurs et publie la version.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tag et version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Le tag correspond à Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "Le tag $GITHUB_REF_NAME ne correspond pas à la version $version."; exit 1; }
+
+  windows:
+    name: Installateur Windows
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construction
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/creer-installateur.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  macos:
+    name: Installateur macOS
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construction
+        run: bash packaging/macos/creer-installateur.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Publication
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Empreintes
+        working-directory: assets
+        run: sha256sum * > SHA256SUMS.txt
+      - name: Création de la version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" assets/* --title "Euhpen ${GITHUB_REF_NAME#v}" --notes-file packaging/notes-de-version.md

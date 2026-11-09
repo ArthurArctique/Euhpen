@@ -1,0 +1,14 @@
+# Réglages des outils de développement pour le code Python du modèle.
+# Dépendances : requirements.txt. Le paquet n'est pas installé : l'application règle PYTHONPATH.
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = ["B905", "SIM105"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,18 @@
+Installer Euhpen sur un Mac à puce Apple (M1 ou plus récent, macOS 12 ou plus récent)
+
+1. Double-cliquez sur « Installer Euhpen ».
+
+2. Euhpen n'est pas signé par un compte développeur Apple : la première fois, macOS refuse
+   de l'ouvrir. Fermez le message, puis ouvrez Réglages Système > Confidentialité et sécurité,
+   descendez jusqu'à « Installer Euhpen » et cliquez sur « Ouvrir quand même ».
+
+   Ou bien, dans le Terminal, après avoir glissé l'installateur dans le dossier Téléchargements :
+
+     xattr -dr com.apple.quarantine ~/Downloads/"Installer Euhpen.app"
+
+3. Suivez la fenêtre. Euhpen s'installe dans ~/Applications/Euhpen, sans mot de passe
+   administrateur. Comptez environ 3 Go avec la détection des « euh ».
+
+Pour désinstaller : ouvrez « Désinstaller Euhpen » dans le dossier d'installation.
+
+Tout reste sur votre Mac. Aucun fichier d'origine n'est jamais modifié.

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+/.euhpen-install
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# Médias et sorties de test locaux
+/media/
+/test-media/
+*.euhpen.xml
+
+# Rust
+/target/

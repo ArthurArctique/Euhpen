@@ -1,0 +1,61 @@
+[package]
+name = "euhpen"
+version = "0.1.0"
+edition = "2021"
+description = "Coupe les silences et les hésitations dans des rushes, exporte un XML pour Premiere Pro et DaVinci Resolve."
+license = "MIT"
+default-run = "euhpen"
+
+[lib]
+name = "euhpen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "euhpen"
+path = "src/bin/euhpen.rs"
+
+[[bin]]
+name = "euhpen-gui"
+path = "src/bin/euhpen-gui.rs"
+
+# Installateur Windows et macOS : les scripts de packaging/ lui donnent l'application à embarquer.
+[[bin]]
+name = "euhpen-setup"
+path = "src/bin/euhpen-setup.rs"
+required-features = ["installer"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[features]
+installer = ["dep:ureq", "dep:zip"]
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+cpal = "0.18"
+rfd = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+clap = { version = "4", features = ["derive"] }
+blake2 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+glob = "0.3"
+memmap2 = "0.9"
+regex = "1"
+arc-swap = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Sans compilateur C : TLS du système (schannel, Security.framework), et zlib écrite en Rust.
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"], optional = true }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+debug = false
+strip = true
+
+# L'analyse d'une heure de son reste rapide même en mode debug.
+[profile.dev.package."*"]
+opt-level = 2

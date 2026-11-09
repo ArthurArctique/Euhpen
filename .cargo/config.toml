@@ -1,0 +1,5 @@
+# Chaîne Windows du lanceur : elle n'a besoin ni de Visual Studio ni de MinGW.
+# rust-lld est fourni avec Rust, et la liaison statique évite de livrer libunwind.dll.
+[target.x86_64-pc-windows-gnullvm]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes", "-C", "target-feature=+crt-static"]
