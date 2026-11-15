@@ -8,7 +8,7 @@ use crate::decision::{CutPlan, Reason};
 use crate::fps::format_rate;
 use crate::probe::MediaInfo;
 use crate::settings::Threshold;
-use crate::transcript::{Kind, LANGUAGES};
+use crate::transcript::{Kind, BREATH_ATTRIBUTION, BREATH_MODEL, BREATH_NOTE, LANGUAGES};
 
 use super::state::{App, CfrStatus, Dialog, ProxyStatus, Status, TrStatus};
 use super::theme::{self, alpha, card, hint, primary};
@@ -178,6 +178,7 @@ impl App {
         let mut retry = None;
         let mut convert = None;
         let mut retry_proxy = None;
+        let task = if self.settings.hesitations { "Transcription" } else { "Détection" };
         let width = ui.available_width();
         ScrollArea::vertical().id_salt("rushes").max_height(list_height).auto_shrink([false, false]).show(ui, |ui| {
             if self.items.is_empty() {
@@ -234,6 +235,9 @@ impl App {
                             if stats.hesitations > 0 {
                                 text += &format!(" · {} euh", stats.hesitations);
                             }
+                            if stats.breaths > 0 {
+                                text += &format!(" · {} resp.", stats.breaths);
+                            }
                             ui.label(RichText::new(text).small().color(theme::ACCENT));
                             if stats.low_contrast {
                                 ui.label(RichText::new("contraste faible").small().color(theme::WARN));
@@ -250,10 +254,10 @@ impl App {
                             _ => {}
                         }
                         if let TrStatus::Running(f, label) = &item.tr {
-                            let text = if label.is_empty() { format!("Transcription {} %", (f * 100.0).round() as i64) } else { label.clone() };
+                            let text = if label.is_empty() { format!("{task} {} %", (f * 100.0).round() as i64) } else { label.clone() };
                             small_progress(ui, &text, *f);
                         } else if item.tr == TrStatus::Queued {
-                            ui.label(hint("Transcription en attente"));
+                            ui.label(hint(format!("{task} en attente")));
                         }
                         if media.vfr {
                             ui.horizontal_wrapped(|ui| {
@@ -358,8 +362,13 @@ impl App {
                         let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                         ui.painter().rect_filled(rect, 2, theme::reason_color(reason));
                         let mut text = format!("{} : {}", theme::reason_label(reason), duration_text(seconds));
-                        if reason == Reason::Hesitation {
-                            text += &format!(" ({})", plan.event_count(Kind::Hesitation));
+                        let counted = match reason {
+                            Reason::Hesitation => Some(Kind::Hesitation),
+                            Reason::Breath => Some(Kind::Breath),
+                            _ => None,
+                        };
+                        if let Some(kind) = counted {
+                            text += &format!(" ({})", plan.event_count(kind));
                         }
                         ui.label(hint(text));
                     });
@@ -476,11 +485,28 @@ impl App {
         ui.add(egui::Label::new(hint("Transcription : Whisper (OpenAI, licence MIT). Détection entraînée sur le corpus Rhapsodie (CC BY-NC-SA 3.0 FR) : usage non commercial.")).wrap());
     }
 
+    fn breath_section(&mut self, ui: &mut Ui, plan: Option<&CutPlan>) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Respirations").strong().size(14.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                toggle_switch(ui, &mut self.settings.breaths);
+            });
+        });
+        ui.add(egui::Label::new(hint("Repère les respirations dans le son lui-même, sans transcription, et les coupe comme des silences.")).wrap());
+        // Avec les hésitations, l'état de la transcription est affiché plus haut.
+        if self.settings.breaths && !self.settings.hesitations {
+            self.transcription_status(ui, plan);
+        }
+        ui.add(egui::Label::new(hint(format!("Détection : {BREATH_ATTRIBUTION}. {BREATH_NOTE}"))).wrap());
+    }
+
     fn transcription_status(&mut self, ui: &mut Ui, plan: Option<&CutPlan>) {
         let Some(item) = self.current() else { return };
         let id = item.id;
         let status = item.tr.clone();
         let transcript = item.transcript.clone();
+        let (hesitations, breaths) = (self.settings.hesitations, self.settings.breaths);
         match status {
             TrStatus::Running(f, label) => {
                 let text = if label.is_empty() { "Transcription…".to_string() } else { label };
@@ -498,12 +524,24 @@ impl App {
                 });
             }
             TrStatus::Ready => {
-                let cut = plan.map(|p| p.event_count(Kind::Hesitation)).unwrap_or(0);
-                let found = plan.map(|p| p.events.iter().filter(|e| e.kind == Kind::Hesitation).count()).unwrap_or(0);
+                let counts = |kind: Kind| {
+                    let found = plan.map(|p| p.events.iter().filter(|e| e.kind == kind).count()).unwrap_or(0);
+                    (found, plan.map(|p| p.event_count(kind)).unwrap_or(0))
+                };
                 let device = transcript.as_ref().map(|t| t.device.clone()).unwrap_or_default();
                 let model = transcript.as_ref().map(|t| t.model.clone()).unwrap_or_default();
+                let verb = if model == BREATH_MODEL { "Analysé" } else { "Transcrit" };
+                let mut text = format!("{verb} avec {model} ({device})");
+                if hesitations {
+                    let (found, cut) = counts(Kind::Hesitation);
+                    text += &format!(" · {found} hésitations, {cut} coupées");
+                }
+                if breaths {
+                    let (found, cut) = counts(Kind::Breath);
+                    text += &format!(" · {found} respirations, {cut} coupées");
+                }
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(hint(format!("Transcrit avec {model} ({device}) · {found} hésitations, {cut} coupées")));
+                    ui.label(hint(text));
                     if ui.small_button("Refaire").clicked() {
                         self.retranscribe(id, true);
                     }
@@ -620,6 +658,8 @@ impl App {
             self.silence_section(ui, plan.as_deref());
             ui.separator();
             self.hesitation_section(ui, plan.as_deref());
+            ui.separator();
+            self.breath_section(ui, plan.as_deref());
             ui.separator();
             self.export_section(ui);
             ui.add_space(8.0);

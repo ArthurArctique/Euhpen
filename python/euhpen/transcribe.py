@@ -1,8 +1,9 @@
-"""Transcription mot à mot avec Whisper, puis détection des hésitations.
+"""Transcription mot à mot avec Whisper, puis détection des hésitations et des respirations.
 
 Whisper donne les mots et leurs horodatages. La tête entraînée sur du français (voir
 ``euhpen/finetune``) y ajoute les hésitations, sous forme de jetons entre crochets
-(``[euh]``, ``[étirement]``).
+(``[euh]``, ``[étirement]``), et Respiro-en (voir ``euhpen/breaths``) les respirations
+(``[respiration]``).
 
 Le résultat est mis en cache, indexé par l'empreinte du fichier, le modèle (avec sa
 révision exacte) et la langue. Whisper n'est pas fourni avec Euhpen : il est téléchargé
@@ -43,6 +44,9 @@ TRANSCRIPT_VERSION = 1
 # Whisper pour les mots, plus une tête entraînée sur le français (voir euhpen/finetune).
 HEAD_SUFFIX = "+head"
 WHISPER_HEAD_MODEL = WHISPER_MODEL + HEAD_SUFFIX
+# Respirations (voir euhpen/breaths) : seules, ou ajoutées à la transcription d'un autre modèle.
+BREATH_MODEL = "respiro-en"
+BREATH_SUFFIX = "+" + BREATH_MODEL
 # Fichiers sans lesquels transformers ne peut pas charger le modèle.
 MODEL_FILES = (
     "config.json",
@@ -84,7 +88,7 @@ _COUGH_TOKENS = {
 }
 _BREATH_TOKENS = {
     "breath", "breathing", "breathes", "inhale", "inhales", "inhaling", "exhale", "exhales",
-    "sigh", "sighs", "sniff", "sniffs", "sniffing", "lip smack", "smack", "click", "tsk",
+    "sigh", "sighs", "sniff", "sniffs", "sniffing", "lip smack", "smack", "click", "tsk", "respiration",
 }
 # Hésitations écrites comme des mots ordinaires (sans crochets).
 _PLAIN_FILLERS = {"euh", "heu", "euhm", "hum", "hmm", "hm", "mmh", "uh", "um", "uhm", "erm", "äh", "ähm"}
@@ -187,19 +191,35 @@ def _transcript_path(folder: Path, model: str, revision: str, language: str) -> 
     return folder / f"words-{safe_model}-{revision or 'local'}-{language}-v{TRANSCRIPT_VERSION}.json"
 
 
+def uses_breaths(model: str) -> bool:
+    return model == BREATH_MODEL or model.endswith(BREATH_SUFFIX)
+
+
+def _revision_pattern(model: str) -> str | None:
+    """Révisions acceptées en cache pour ce modèle, ou None s'il ne peut pas tourner ici."""
+    if uses_breaths(model):
+        from .breaths import BREATH_REVISION
+
+        if model == BREATH_MODEL:
+            return rf"r{BREATH_REVISION}"
+        base = _revision_pattern(model.removesuffix(BREATH_SUFFIX))
+        return None if base is None else rf"{base}r{BREATH_REVISION}"
+    if model.endswith(HEAD_SUFFIX):
+        from .finetune.pipeline import head_revision
+
+        head = head_revision(model)
+        return None if head is None else rf"\w+h{head}"
+    return r"\w+"
+
+
 def cached_transcript(folder: Path, model: str, language: str) -> Transcript | None:
     """Transcription en cache dans ce dossier pour ce modèle et cette langue (toute révision)."""
     safe_model = re.sub(r"[^\w.-]", "_", model)
     if not folder.exists():
         return None
-    revision = r"\w+"
-    if model.endswith(HEAD_SUFFIX):
-        from .finetune.pipeline import head_revision
-
-        head = head_revision(model)
-        if head is None:
-            return None
-        revision = rf"\w+h{head}"
+    revision = _revision_pattern(model)
+    if revision is None:
+        return None
     name = rf"words-{re.escape(safe_model)}-{revision}-{re.escape(language)}-v{TRANSCRIPT_VERSION}"
     pattern = re.compile(rf"^{name}\.json$")
     candidates = sorted((p for p in folder.iterdir() if pattern.match(p.name)), key=lambda p: p.stat().st_mtime)
@@ -441,6 +461,10 @@ def transcribe(
     ok, message = hesitations_available()
     if not ok:
         raise RuntimeError(message)
+    if uses_breaths(model):
+        from .breaths import transcribe_breaths
+
+        return transcribe_breaths(job, language, model, use_cache=use_cache, progress=progress)
     if model.endswith(HEAD_SUFFIX):
         from .finetune.pipeline import transcribe_with_head
 

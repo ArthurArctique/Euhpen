@@ -1,10 +1,10 @@
 # Euhpen
 
-Application open source qui coupe les **silences** et les **hésitations** (« euh », « hum »,
-syllabes étirées) dans des rushes où une seule personne parle. Elle exporte une **timeline XML
-pour Premiere Pro et DaVinci Resolve**. Les fichiers originaux ne sont jamais modifiés : la
-timeline y fait référence telle quelle, et vous pouvez étirer les bords des clips dans votre
-logiciel pour redonner de l'air.
+Application open source qui coupe les **silences**, les **hésitations** (« euh », « hum »,
+syllabes étirées) et les **respirations** dans des rushes où une seule personne parle. Elle
+exporte une **timeline XML pour Premiere Pro et DaVinci Resolve**. Les fichiers originaux ne sont
+jamais modifiés : la timeline y fait référence telle quelle, et vous pouvez étirer les bords des
+clips dans votre logiciel pour redonner de l'air.
 
 Tout se fait sur votre ordinateur, hors ligne : Windows, macOS (Apple Silicon) et Linux.
 
@@ -16,18 +16,21 @@ Tout se fait sur votre ordinateur, hors ligne : Windows, macOS (Apple Silicon) e
   - une transcription cliquable.
 - Détection des hésitations entraînée sur du français : Whisper et une petite tête de
   classification, dans un processus Python séparé. Voir [Hésitations](#hésitations).
+- Coupe des respirations, optionnelle : Respiro-en (licence MIT) les repère dans le son, sans
+  transcription. Voir [Respirations](#respirations).
 - Ligne de commande pour les lots et l'automatisation.
 - Presets, statistiques par fichier et totales, traitement de dossiers entiers.
 
-> **Version 0.1.0, première version publique.** Elle a été validée sous Windows avec une carte
-> NVIDIA, et sur un Mac à puce Apple pour l'application et le calcul sur MPS. Linux n'a pas encore
-> été essayé : voir [État et limites](#état-et-limites).
+> **Version 0.2.0 : coupe des respirations.** La version 0.1.0 a été validée sous Windows avec une
+> carte NVIDIA, et sur un Mac à puce Apple pour l'application et le calcul sur MPS. La coupe des
+> respirations n'a encore été essayée que sur Mac, et Linux pas du tout : voir
+> [État et limites](#état-et-limites).
 
 ## Installation
 
 ### Windows : l'installateur
 
-Téléchargez `Euhpen-Setup-0.1.0.exe` depuis la
+Téléchargez `Euhpen-Setup-0.2.0.exe` depuis la
 [dernière version](https://github.com/ArthurArctique/Euhpen/releases/latest), puis ouvrez-le.
 Choisissez le dossier, cochez ce que vous voulez et cliquez sur **Installer**. Il ne faut ni droits
 d'administrateur, ni Rust, ni Python.
@@ -36,7 +39,7 @@ d'administrateur, ni Rust, ni Python.
 | --- | --- | --- |
 | Euhpen | l'application et la ligne de commande | 40 Mo |
 | ffmpeg | lecture des médias ; téléchargé s'il n'est pas déjà présent | 210 Mo |
-| Python 3.12 et PyTorch | détection des « euh », facultative | 4,4 Go avec carte NVIDIA (CUDA 12.8), 0,7 Go sinon |
+| Python 3.12 et PyTorch | détection des « euh » et des respirations, facultative | 4,4 Go avec carte NVIDIA (CUDA 12.8), 0,7 Go sinon |
 | Whisper | facultatif ici : sinon téléchargé à la première détection | 1,6 Go |
 
 Tout va dans `%LOCALAPPDATA%\Programs\Euhpen`. Seul Whisper est rangé à part, dans le cache
@@ -52,7 +55,7 @@ Euhpen. Vos rushes et vos timelines ne sont jamais touchés.
 
 ### macOS (puce Apple) : l'installateur
 
-Téléchargez `Euhpen-Setup-0.1.0-macos-arm64.dmg` depuis la
+Téléchargez `Euhpen-Setup-0.2.0-macos-arm64.dmg` depuis la
 [dernière version](https://github.com/ArthurArctique/Euhpen/releases/latest), ouvrez-le, puis
 ouvrez **Installer Euhpen**. Il faut macOS 12 ou plus récent et un Mac M1 ou plus récent. Il ne
 faut ni mot de passe administrateur, ni Rust, ni Python.
@@ -61,7 +64,7 @@ faut ni mot de passe administrateur, ni Rust, ni Python.
 | --- | --- | --- |
 | Euhpen | l'application et la ligne de commande | 30 Mo |
 | ffmpeg | lecture des médias ; téléchargé s'il n'est pas déjà présent | 130 Mo |
-| Python 3.12 et PyTorch | détection des « euh », facultative ; calcul sur la puce graphique (MPS) | environ 1 Go |
+| Python 3.12 et PyTorch | détection des « euh » et des respirations, facultative ; calcul sur la puce graphique (MPS) | environ 1 Go |
 | Whisper | facultatif ici : sinon téléchargé à la première détection | 1,6 Go |
 
 Tout va dans `~/Applications/Euhpen`, sauf Whisper, rangé dans le cache Hugging Face.
@@ -305,6 +308,29 @@ réglages ne relance rien.
 Le fonctionnement du réseau, son entraînement et les mesures sont décrits dans
 [Le modèle en détail](#le-modèle-en-détail).
 
+## Respirations
+
+La coupe des respirations est optionnelle et indépendante des hésitations. Elle repose sur
+**Respiro-en** (Dong Yang et al., Interspeech 2024, licence MIT) : un petit réseau qui donne,
+toutes les 10 ms, la probabilité d'entendre une respiration, directement dans le son, sans
+transcription.
+
+- Ses poids (35 Mo) sont téléchargés depuis Hugging Face au premier usage, à une révision figée,
+  et vérifiés par leur empreinte SHA-256. Ils ne sont pas dans ce dépôt.
+- Il tourne dans l'environnement Python de la détection des hésitations (PyTorch) : acceptez son
+  installation dans le lanceur. Sur un Mac à puce Apple, comptez quelques secondes pour dix
+  minutes de voix.
+- Chaque respiration est coupée bord à bord, sans marge : ses bornes sont précises à 10 ms près.
+  Les bords sont recalés sur l'instant le plus calme à ±50 ms. Une respiration dont la probabilité
+  reste sous 50 % (`min_probability`) est gardée.
+
+Dans l'interface, activez « Respirations ». En ligne de commande, ajoutez `--breaths` à
+`euhpen cut`.
+
+Le réseau a été entraîné sur des livres audio anglais (LibriTTS-R). Sur trois chapitres de
+livres audio français, ses détections sont 38 à 43 dB sous le niveau de la parole, mais leur
+rappel n'a pas été mesuré, faute d'annotations.
+
 ## Ligne de commande
 
 Avec l'installateur, la commande (`euhpen.exe` sous Windows, `euhpen` sous macOS) est dans le
@@ -315,6 +341,7 @@ variable `EUHPEN_ROOT` indique un autre emplacement.
 ```bash
 euhpen cut interview.mov                      # silences → interview_euhpen.{premiere,resolve}.xml
 euhpen cut interview.mov --hesitations        # + « euh » (langue : --language fr)
+euhpen cut interview.mov --breaths            # + respirations (sans Whisper)
 euhpen cut rushes/ --order date --preset Podcast
 euhpen cut interview.mov --dry-run --min-silence 0.6   # statistiques sans rien écrire
 ```
@@ -342,6 +369,7 @@ marqueur au début de chacun.
 | `--hesitations` | non | Coupe les « euh » et les syllabes étirées (Whisper + tête) |
 | `--language` | `fr` | Langue parlée (24 langues ; la tête n'a été évaluée qu'en français) |
 | `--event-margin` | `0.05` | Marge (s) autour d'une hésitation |
+| `--breaths` | non | Coupe les respirations (Respiro-en), sans marge et sans Whisper |
 | `--preset NOM` | | Part d'un preset (ceux de l'interface, y compris les vôtres) |
 | `--settings fichier.json` | | Charge un jeu de réglages (mêmes noms que ci-dessus, avec `_`) |
 
@@ -780,9 +808,22 @@ liste des vérifications est dans [docs/tests-import.md](docs/tests-import.md).
 
 ## État et limites
 
-État de la version 0.1.0.
+État de la version 0.2.0. Elle ajoute la coupe des respirations ; le reste n'a pas changé depuis
+la version 0.1.0, dont les vérifications suivent.
 
-**Vérifié sous Windows 11, carte NVIDIA RTX 5070** :
+**Vérifié pour la coupe des respirations, sur un Mac à puce Apple** :
+
+- les tests Rust et Python, la compilation et la construction de l'image disque ;
+- la ligne de commande et l'interface (autotest : analyse, lecture qui saute les coupes, export)
+  sur un chapitre de livre audio français de 11 min 42 s : 219 respirations trouvées, 218 coupées.
+
+**Pas encore vérifié pour la coupe des respirations** :
+
+- sous Windows, et dans une application posée par les installateurs de cette version ;
+- avec la détection des hésitations activée en même temps ;
+- la part des respirations réellement trouvées, faute d'annotations.
+
+**Vérifié avec la version 0.1.0, sous Windows 11, carte NVIDIA RTX 5070** :
 
 - les tests Rust et Python ;
 - le calcul des coupes et les XML, comparés à une implémentation de référence : 600 jeux de
@@ -797,7 +838,7 @@ liste des vérifications est dans [docs/tests-import.md](docs/tests-import.md).
   espace et accent, coupure du réseau et reprise, mise à jour, Euhpen resté ouvert, annulation,
   désinstallation.
 
-**Vérifié sur un Mac à puce Apple** :
+**Vérifié avec la version 0.1.0, sur un Mac à puce Apple** :
 
 - les tests Rust, la compilation et la construction de l'image disque ;
 - l'image disque publiée, dans un dossier isolé et avec les vrais téléchargements, sans ffmpeg ni
@@ -806,7 +847,7 @@ liste des vérifications est dans [docs/tests-import.md](docs/tests-import.md).
 - l'application ainsi installée, ouverte avec un `PATH` réduit comme depuis le Finder :
   transcription sur MPS, lecture, aperçu de l'image, inversion d'une coupe, export, ligne de commande.
 
-**Pas encore vérifié avec cette version** :
+**Pas encore vérifié** :
 
 - sous macOS, le double-clic sur l'installateur depuis l'image disque après l'alerte de macOS, et
   le lanceur `Lancer Euhpen.command` ;
@@ -839,6 +880,11 @@ reste entièrement sous licence MIT. Le code d'entraînement et d'inférence est
 
 La fiche Hugging Face de Rhapsodie indique CC0 : la licence retenue ici est celle du site du
 corpus.
+
+La coupe des respirations utilise **Respiro-en** (Dong Yang, licence MIT). Le code de son réseau
+est repris, avec sa notice de licence, dans `python/euhpen/breaths/network.py`, et ses poids sont
+téléchargés depuis Hugging Face au premier usage. Elle n'utilise pas les poids de la tête : leur
+restriction non commerciale ne la concerne pas.
 
 ffmpeg n'est pas fourni avec Euhpen : il s'installe séparément, ou l'installateur le télécharge
 à part (sous licence GPL : version « essentials » de gyan.dev sous Windows, compilation de

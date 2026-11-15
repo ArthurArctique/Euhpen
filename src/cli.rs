@@ -4,6 +4,7 @@
 //! euhpen ui                             # interface
 //! euhpen cut rush1.mov rush2.mov        # coupe les silences, écrit les XML
 //! euhpen cut --hesitations rush.mov     # coupe aussi les « euh » (Whisper + détection)
+//! euhpen cut --breaths rush.mov         # coupe aussi les respirations (Respiro-en)
 //! euhpen probe rush.mov                 # métadonnées (fps, timecode, pistes…)
 //! euhpen analyze dossier/               # analyse et met en cache, sans exporter
 //! euhpen cfr telephone.mp4              # convertit un fichier VFR en fréquence fixe
@@ -21,7 +22,10 @@ use crate::presets::{get_preset, list_presets};
 use crate::probe::{probe, MediaInfo};
 use crate::settings::{Settings, Threshold};
 use crate::timeline::{build_timeline, Timeline};
-use crate::transcript::{Transcript, HEAD_ATTRIBUTION, HEAD_LICENSE, LANGUAGES, MODEL_ATTRIBUTION, WHISPER_HEAD_MODEL};
+use crate::transcript::{
+    transcript_model, Kind, Transcript, BREATH_ATTRIBUTION, BREATH_NOTE, HEAD_ATTRIBUTION, HEAD_LICENSE, LANGUAGES,
+    MODEL_ATTRIBUTION,
+};
 use crate::worker::{hesitations_available, run_python_console, JobRequest, TranscribeSession};
 use crate::VERSION;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -113,11 +117,17 @@ fn run_analyses(paths: &[String], use_cache: bool) -> Result<Vec<Analysis>, Stri
     Ok(results)
 }
 
-fn print_stats(tl: &Timeline) {
+fn print_stats(tl: &Timeline, settings: &Settings) {
     let fps = tl.fps;
     let mut rows: Vec<Vec<String>> = Vec::new();
-    let (mut before_total, mut after_total, mut cuts_total, mut events_total) = (0.0, 0.0, 0, 0);
-    let show_events = tl.items.iter().any(|i| i.plan.as_ref().is_some_and(|p| !p.events.is_empty()));
+    let (mut before_total, mut after_total, mut cuts_total) = (0.0, 0.0, 0);
+    // Jetons coupés : hésitations (toux et rires compris) d'un côté, respirations de l'autre.
+    let columns: Vec<(&str, bool)> = [("Euh coupés", false, settings.hesitations), ("Resp. coupées", true, settings.breaths)]
+        .into_iter()
+        .filter(|column| column.2)
+        .map(|(name, breath, _)| (name, breath))
+        .collect();
+    let mut events_total = vec![0; columns.len()];
     let percent = |before: f64, after: f64| format!("{} %", num(if before != 0.0 { 100.0 * (1.0 - after / before) } else { 0.0 }, 1));
     for item in &tl.items {
         let before = frames_to_seconds(item.source_frames, fps);
@@ -127,10 +137,10 @@ fn print_stats(tl: &Timeline) {
         cuts_total += item.cut_count();
         let threshold = item.plan.as_ref().map_or(String::new(), |p| format!("{} dBFS", num(p.levels.threshold_db, 1)));
         let mut row = vec![item.media.name(), duration_text(before), duration_text(after), percent(before, after), item.cut_count().to_string(), threshold];
-        if show_events {
-            let cut_events = item.plan.as_ref().map_or(0, |p| p.events.iter().filter(|e| e.cut).count());
-            events_total += cut_events;
-            row.push(cut_events.to_string());
+        for (k, &(_, breath)) in columns.iter().enumerate() {
+            let cut = item.plan.as_ref().map_or(0, |p| p.events.iter().filter(|e| e.cut && (e.kind == Kind::Breath) == breath).count());
+            events_total[k] += cut;
+            row.push(cut.to_string());
         }
         rows.push(row);
     }
@@ -143,15 +153,11 @@ fn print_stats(tl: &Timeline) {
             cuts_total.to_string(),
             String::new(),
         ];
-        if show_events {
-            total.push(events_total.to_string());
-        }
+        total.extend(events_total.iter().map(|n| n.to_string()));
         rows.push(total);
     }
     let mut header: Vec<String> = ["Fichier", "Avant", "Après", "Supprimé", "Coupes", "Seuil"].map(String::from).to_vec();
-    if show_events {
-        header.push("Euh coupés".to_string());
-    }
+    header.extend(columns.iter().map(|(name, _)| name.to_string()));
     let length = |s: &String| s.chars().count();
     let mut widths: Vec<usize> =
         (0..header.len()).map(|i| rows.iter().chain(std::iter::once(&header)).map(|r| length(&r[i])).max().unwrap_or(0)).collect();
@@ -210,6 +216,11 @@ fn plan_to_json(tl: &Timeline, settings: &Settings) -> Value {
                 "kept_seconds": plan.map_or(Vec::new(), |p| p.kept.iter().map(|&(a, b)| json!([round3(a), round3(b)])).collect()),
                 "removed_seconds": plan.map_or(Vec::new(), |p| p.removed.iter().map(|r| json!({
                     "start": round3(r.start), "end": round3(r.end), "reason": r.reason.as_str(),
+                })).collect()),
+                // Chaque hésitation ou respiration détectée, coupée ou non (et pourquoi).
+                "events": plan.map_or(Vec::new(), |p| p.events.iter().map(|e| json!({
+                    "text": e.text, "kind": e.kind.as_str(), "start": round3(e.start), "end": round3(e.end),
+                    "probability": e.probability.map(round3), "cut": e.cut, "note": e.note,
                 })).collect()),
             })
         })
@@ -384,6 +395,13 @@ struct CutArgs {
     #[arg(long, help_heading = "Hésitations")]
     event_margin: Option<f64>,
 
+    /// Coupe aussi les respirations (détectées par Respiro-en, modèle de 35 Mo téléchargé au premier usage)
+    #[arg(long, overrides_with = "no_breaths", help_heading = "Respirations")]
+    breaths: bool,
+    /// Ne coupe pas les respirations
+    #[arg(long, overrides_with = "breaths", help_heading = "Respirations")]
+    no_breaths: bool,
+
     /// Ordre des fichiers : nom, date de tournage, ou ordre donné
     #[arg(long, value_enum, default_value_t = Order::Name, help_heading = "Timeline")]
     order: Order,
@@ -444,22 +462,38 @@ fn settings_from_args(args: &CutArgs) -> Result<Settings, String> {
     if args.no_hesitations {
         s.hesitations = false;
     }
+    if args.breaths {
+        s.breaths = true;
+    }
+    if args.no_breaths {
+        s.breaths = false;
+    }
     s.validate()
 }
 
-fn run_transcriptions(analyses: &[Analysis], args: &CutArgs) -> Result<HashMap<String, Transcript>, String> {
+fn run_transcriptions(analyses: &[Analysis], settings: &Settings, args: &CutArgs) -> Result<HashMap<String, Transcript>, String> {
+    let Some(model) = transcript_model(settings.hesitations, settings.breaths) else {
+        return Ok(HashMap::new());
+    };
     if !LANGUAGES.iter().any(|(code, _)| *code == args.language) {
         let codes: Vec<&str> = LANGUAGES.iter().map(|(code, _)| *code).collect();
         return Err(format!("langue inconnue : {}. Langues : {}", args.language, codes.join(", ")));
     }
     hesitations_available()?;
-    eprintln!("Hésitations : {MODEL_ATTRIBUTION}, langue {}.", args.language);
-    eprintln!("  {HEAD_ATTRIBUTION}. {HEAD_LICENSE}");
+    if settings.hesitations {
+        eprintln!("Hésitations : {MODEL_ATTRIBUTION}, langue {}.", args.language);
+        eprintln!("  {HEAD_ATTRIBUTION}. {HEAD_LICENSE}");
+    }
+    if settings.breaths {
+        eprintln!("Respirations : {BREATH_ATTRIBUTION}.");
+        eprintln!("  {BREATH_NOTE}");
+    }
+    let action = if settings.hesitations { "transcrit" } else { "respirations détectées" };
     let mut session = TranscribeSession::default();
     let mut out = HashMap::new();
     for analysis in analyses {
         let mut progress = Progress::new(&analysis.media.name());
-        let request = JobRequest { analysis, language: &args.language, model: WHISPER_HEAD_MODEL, force: args.no_cache };
+        let request = JobRequest { analysis, language: &args.language, model, force: args.no_cache };
         let outcome = session.run(request, &mut |f, label| progress.step(f, label), &|| false, &mut |hw| {
             if hw.device != "cuda" && hw.device != "mps" {
                 progress_note(&format!("calcul sur {}", hw.name));
@@ -472,7 +506,7 @@ fn run_transcriptions(analyses: &[Analysis], args: &CutArgs) -> Result<HashMap<S
                 return Err(message);
             }
         };
-        let verb = format!("transcrit en {} s", num(outcome.transcript.processing_time, 0));
+        let verb = format!("{action} en {} s", num(outcome.transcript.processing_time, 0));
         progress.done(outcome.cached, &verb);
         if let Some(mb) = outcome.gpu_memory_mb {
             eprintln!(
@@ -506,7 +540,7 @@ fn cmd_cut(args: &CutArgs) -> Result<i32, String> {
         Order::Args => "args",
     };
     sort_media(&mut analyses, mode, |a| &a.media);
-    let transcripts = if settings.wants_transcript() { run_transcriptions(&analyses, args)? } else { HashMap::new() };
+    let transcripts = if settings.wants_transcript() { run_transcriptions(&analyses, &settings, args)? } else { HashMap::new() };
     let mut entries: Vec<(MediaInfo, Vec<(f64, f64)>, Option<CutPlan>)> = Vec::new();
     for analysis in &analyses {
         let plan = decide(analysis, &settings, None, transcripts.get(&analysis.fingerprint));
@@ -531,7 +565,7 @@ fn cmd_cut(args: &CutArgs) -> Result<i32, String> {
     for w in &tl.warnings {
         warn(w);
     }
-    print_stats(&tl);
+    print_stats(&tl, &settings);
 
     if let Some(path) = &args.segments_json {
         let body = pretty_one_space(&plan_to_json(&tl, &settings))?;
@@ -670,5 +704,19 @@ mod tests {
         let settings = settings_from_args(&args).unwrap();
         assert_eq!(settings.threshold, Threshold::Db(-40.0));
         assert!(settings.hesitations);
+    }
+
+    #[test]
+    fn arguments_des_respirations() {
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["euhpen", "cut", "a.mov"];
+            argv.extend_from_slice(extra);
+            let Command::Cut(args) = Cli::try_parse_from(argv).unwrap().command else { panic!() };
+            settings_from_args(&args).unwrap()
+        };
+        let breaths = parse(&["--breaths"]);
+        assert!(breaths.breaths && !breaths.hesitations && breaths.wants_transcript());
+        assert!(!parse(&["--breaths", "--no-breaths"]).breaths);
+        assert!(!parse(&[]).breaths);
     }
 }

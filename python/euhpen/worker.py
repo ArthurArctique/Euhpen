@@ -36,7 +36,7 @@ def main() -> None:
         channel.write(json.dumps(message, ensure_ascii=False) + "\n")
         channel.flush()
 
-    from .transcribe import AudioJob, detect_hardware, loaded_device, transcribe
+    from .transcribe import BREATH_MODEL, AudioJob, detect_hardware, loaded_device, transcribe
 
     try:
         hardware = detect_hardware().to_dict()
@@ -75,8 +75,9 @@ def main() -> None:
                 "words": len(transcript.words),
             }
             if not cached:
-                # Ce qui a réellement servi, lu sur le modèle chargé (pas ce qui était demandé).
-                done["encoder_device"] = loaded_device()
+                # Ce qui a réellement servi, lu sur le modèle chargé (pas ce qui était demandé) ;
+                # sans Whisper, l'appareil où Respiro-en a tourné.
+                done["encoder_device"] = transcript.device if transcript.model == BREATH_MODEL else loaded_device()
                 if _cuda_ready():
                     done["gpu_memory_mb"] = round(sys.modules["torch"].cuda.max_memory_allocated() / 2**20, 1)
             send(done)

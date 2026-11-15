@@ -73,11 +73,11 @@ pub struct Settings {
     pub coughs: bool,
     /// Couper les rires (gardés par défaut : ils font souvent partie du propos).
     pub laughs: bool,
-    /// Couper les respirations et bruits de bouche notés par le modèle.
+    /// Couper les respirations (détectées par Respiro-en, avec ou sans les hésitations).
     pub breaths: bool,
-    /// Marge ajoutée de chaque côté d'une hésitation coupée.
+    /// Marge ajoutée de chaque côté d'une hésitation coupée (pas des respirations).
     pub event_margin: f64,
-    /// Une hésitation dont la probabilité est plus faible n'est pas coupée.
+    /// Une hésitation ou une respiration dont la probabilité est plus faible n'est pas coupée.
     pub min_probability: f64,
 }
 
@@ -163,8 +163,9 @@ impl Settings {
         serde_json::from_value::<Settings>(value.clone()).ok()?.validate().ok()
     }
 
+    /// Une transcription est nécessaire : pour les hésitations, les respirations, ou les deux.
     pub fn wants_transcript(&self) -> bool {
-        self.hesitations
+        self.hesitations || self.breaths
     }
 }
 
@@ -188,5 +189,12 @@ mod tests {
         assert!(Settings::from_json_strict(r#"{"min_silence": -1}"#).is_err());
         assert!(Settings::from_json_strict(r#"{"threshold": 5}"#).is_err());
         assert!(Settings::from_json_strict(r#"{"threshold": "auto"}"#).is_ok());
+    }
+
+    #[test]
+    fn transcription_pour_les_hesitations_ou_les_respirations() {
+        assert!(!Settings::default().wants_transcript());
+        assert!(Settings { hesitations: true, ..Settings::default() }.wants_transcript());
+        assert!(Settings { breaths: true, ..Settings::default() }.wants_transcript());
     }
 }

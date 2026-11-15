@@ -110,8 +110,9 @@ if (-not $WantHes) {
     Write-Host "La détection des « euh » utilise Whisper (OpenAI) et une tête entraînée sur le corpus Rhapsodie,"
     Write-Host "sous licence CC BY-NC-SA 3.0 FR : usage non commercial. Elle ajoute environ"
     Write-Host "3 Go (PyTorch) ; Whisper est téléchargé au premier usage (1,5 Go)."
+    Write-Host "Elle sert aussi à repérer les respirations (Respiro-en, licence MIT, 35 Mo au premier usage)."
     Write-Host "Sans elle, Euhpen coupe les silences normalement."
-    $WantHes = if (Ask "Installer la détection des hésitations ?") { "1" } else { "0" }
+    $WantHes = if (Ask "Installer la détection des hésitations et des respirations ?") { "1" } else { "0" }
 }
 
 if ($WantHes -eq "1" -and (-not (Test-Path $Py) -or $Installed -ne $Signature)) {

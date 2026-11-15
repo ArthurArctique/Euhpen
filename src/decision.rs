@@ -3,10 +3,11 @@
 //! Aucun accès disque ni appel à ffmpeg ici : l'interface rappelle [`decide`] à chaque
 //! mouvement de curseur sans relancer l'analyse ni la transcription.
 //!
-//! Une hésitation coupée est d'abord comptée comme du silence : « mot … euh … mot » devient
-//! un seul long silence, coupé avec l'air habituel autour des vrais mots. Elle est aussi
-//! coupée directement ([début − marge, fin + marge]), avec des bords recalés sur le point
-//! le plus calme à ±50 ms près.
+//! Une hésitation ou une respiration coupée est d'abord comptée comme du silence :
+//! « mot … euh … mot » devient un seul long silence, coupé avec l'air habituel autour des
+//! vrais mots. Elle est aussi coupée directement ([début − marge, fin + marge]), avec des
+//! bords recalés sur le point le plus calme à ±50 ms près. Une respiration n'a pas de marge :
+//! Respiro-en en donne les bornes à 10 ms près.
 
 use crate::analysis::Analysis;
 use crate::audio::FLOOR_DB;
@@ -319,15 +320,15 @@ fn silence_cuts(silences: &[Interval], settings: &Settings, duration: f64) -> Ve
 
 // --- hésitations et bruits --------------------------------------------------------------
 
+/// Les respirations ont leur propre réglage ; toux et rires accompagnent les hésitations.
 fn kind_enabled(kind: Kind, settings: &Settings) -> bool {
-    settings.hesitations
-        && match kind {
-            Kind::Hesitation => true,
-            Kind::Cough => settings.coughs,
-            Kind::Laugh => settings.laughs,
-            Kind::Breath => settings.breaths,
-            Kind::Event | Kind::Word => false,
-        }
+    match kind {
+        Kind::Breath => settings.breaths,
+        Kind::Hesitation => settings.hesitations,
+        Kind::Cough => settings.hesitations && settings.coughs,
+        Kind::Laugh => settings.hesitations && settings.laughs,
+        Kind::Event | Kind::Word => false,
+    }
 }
 
 /// Instant le plus calme près de `target` (±50 ms), compris dans [low, high].
@@ -404,8 +405,11 @@ fn event_cuts(
     // Les mots voisins ne limitent pas les coupes : Whisper les colle les uns aux autres, et
     // leurs bornes ne disent pas où la parole s'arrête.
     for e in events.iter_mut().filter(|e| e.cut) {
-        let mut a = (e.start - settings.event_margin).max(0.0);
-        let mut b = (e.end + settings.event_margin).min(duration);
+        // Les bornes d'une respiration viennent du son lui-même : une marge les pousserait
+        // dans les mots voisins, alors que le recalage peut les en éloigner.
+        let margin = if e.kind == Kind::Breath { 0.0 } else { settings.event_margin };
+        let mut a = (e.start - margin).max(0.0);
+        let mut b = (e.end + margin).min(duration);
         if b - a > 2.0 * hop {
             // Les horodatages sont approximatifs : chaque bord peut bouger vers le point le plus calme.
             a = quietest_edge(levels, hop, a, 0.0, b - hop);
@@ -581,7 +585,7 @@ mod tests {
 
     // --- hésitations (repris des tests de la version Python) ------------------------------
 
-    use crate::transcript::{classify, Kind, Transcript, Word, WHISPER_HEAD_MODEL, WHISPER_MODEL};
+    use crate::transcript::{classify, Kind, Transcript, Word, BREATH_MODEL, WHISPER_HEAD_MODEL, WHISPER_MODEL};
 
     const SPEECH: f32 = -20.0;
     const SILENCE: f32 = -60.0;
@@ -693,6 +697,45 @@ mod tests {
         assert_eq!((plan.event_count(Kind::Cough), plan.event_count(Kind::Laugh)), (1, 0));
         let both = decide(&a, &Settings { laughs: true, coughs: false, ..on() }, None, Some(&t));
         assert_eq!((both.event_count(Kind::Cough), both.event_count(Kind::Laugh)), (0, 1));
+    }
+
+    /// Mot, 0,3 s de calme, respiration de 0,4 s (plus forte que le bruit de fond), mot.
+    fn breath_between_words() -> (Analysis, Transcript) {
+        let a = make_analysis(&[(2.0, SPEECH), (0.3, SILENCE), (0.4, -35.0), (0.05, SILENCE), (2.0, SPEECH)], 0.0, None);
+        let t = with_model(BREATH_MODEL, vec![word("[respiration]", 2.3, 2.7, Some(0.98))]);
+        (a, t)
+    }
+
+    #[test]
+    fn respirations_coupees_sans_les_hesitations() {
+        let (a, t) = breath_between_words();
+        let breaths = Settings { breaths: true, ..fixed() };
+        let plan = decide(&a, &breaths, None, Some(&t));
+        assert_eq!(plan.event_count(Kind::Breath), 1);
+        // Le calme et la respiration ne forment qu'une pause : l'air est gardé après le mot,
+        // la respiration coupée jusqu'au point calme le plus proche de ses bornes.
+        assert_kept(&plan, &[(0.0, 2.15), (2.71, 4.75)]);
+        assert_eq!(reasons(&plan), [Reason::Silence, Reason::Breath]);
+        let span = plan.events[0].cut_span.unwrap();
+        assert!((span.0 - 2.29).abs() < 1e-6 && (span.1 - 2.71).abs() < 1e-6, "{span:?}");
+        // La marge des hésitations ne s'applique pas aux respirations.
+        let wide = decide(&a, &Settings { breaths: true, event_margin: 0.2, ..fixed() }, None, Some(&t));
+        assert_eq!(wide.events[0].cut_span, plan.events[0].cut_span);
+
+        let off = decide(&a, &Settings { hesitations: true, ..fixed() }, None, Some(&t));
+        assert_eq!((off.event_count(Kind::Breath), off.events[0].note), (0, "désactivé"));
+        let doubtful = with_model(BREATH_MODEL, vec![word("[respiration]", 2.3, 2.7, Some(0.3))]);
+        let kept = decide(&a, &breaths, None, Some(&doubtful));
+        assert_eq!((kept.event_count(Kind::Breath), kept.events[0].note), (0, "probabilité trop faible"));
+    }
+
+    #[test]
+    fn toux_et_rires_suivent_les_hesitations() {
+        let t = words(&[("[cough]", 1.0, 1.5, 0.99), ("[laughter]", 2.0, 2.5, 0.99)]);
+        let a = make_analysis(&[(3.0, SPEECH)], 0.0, None);
+        let plan = decide(&a, &Settings { breaths: true, coughs: true, laughs: true, ..fixed() }, None, Some(&t));
+        assert_eq!(plan.events.len(), 2);
+        assert!(plan.events.iter().all(|e| !e.cut && e.note == "désactivé"));
     }
 
     #[test]

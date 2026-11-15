@@ -1,4 +1,5 @@
-//! Client du processus Python qui exécute le modèle (Whisper + détection des hésitations).
+//! Client du processus Python qui exécute les modèles (Whisper + détection des hésitations,
+//! Respiro-en pour les respirations).
 //!
 //! Le modèle reste chargé entre deux fichiers. On parle au processus en lignes JSON : une
 //! demande par ligne sur son entrée standard, des messages d'avancement sur sa sortie standard.
@@ -52,13 +53,13 @@ pub fn python_exe() -> Result<PathBuf, String> {
         Ok(python)
     } else {
         Err(format!(
-            "L'environnement Python du modèle est introuvable ({}). Relancez l'installateur d'Euhpen en cochant la détection des hésitations. Avec le code source, relancez le lanceur (si vous aviez refusé cette installation, supprimez d'abord le fichier .euhpen-install).",
+            "L'environnement Python du modèle est introuvable ({}). Relancez l'installateur d'Euhpen en cochant la détection des « euh » et des respirations. Avec le code source, relancez le lanceur (si vous aviez refusé cette installation, supprimez d'abord le fichier .euhpen-install).",
             python.display()
         ))
     }
 }
 
-/// La détection des hésitations est-elle installée ?
+/// La détection des hésitations et des respirations est-elle installée ? (Même environnement Python.)
 pub fn hesitations_available() -> Result<(), String> {
     let python = python_exe()?;
     let code = "import importlib.util as u\nprint(','.join(m for m in ('torch','transformers','accelerate') if u.find_spec(m) is None))";
@@ -71,7 +72,7 @@ pub fn hesitations_available() -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "La détection des hésitations n'est pas installée (manque : {missing}). Relancez l'installateur d'Euhpen (ou le lanceur, avec le code source) et acceptez son installation."
+            "La détection des hésitations et des respirations n'est pas installée (manque : {missing}). Relancez l'installateur d'Euhpen (ou le lanceur, avec le code source) et acceptez son installation."
         ))
     }
 }

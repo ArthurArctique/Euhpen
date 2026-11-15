@@ -27,7 +27,7 @@ use crate::probe::{absolute, find_tool, probe};
 use crate::proxy::{make_preview_audio, make_proxy, proxy_rate};
 use crate::settings::Settings;
 use crate::timeline::build_timeline;
-use crate::transcript::{cached_transcript, Kind, Transcript, WHISPER_HEAD_MODEL};
+use crate::transcript::{cached_transcript, transcript_model, Kind, Transcript, WHISPER_HEAD_MODEL};
 use crate::worker::{hesitations_available, quick_hardware, Hardware, JobOutcome, JobRequest, TranscribeSession};
 
 use super::player::{Media, Mode, Player, VideoSource};
@@ -111,6 +111,7 @@ pub struct Stats {
     pub kept: f64,
     pub cuts: usize,
     pub hesitations: usize,
+    pub breaths: usize,
     pub low_contrast: bool,
     pub empty: bool,
 }
@@ -545,8 +546,11 @@ impl App {
         self.toasts.push(Toast { text: text.into(), kind, until: Instant::now() + Duration::from_secs(seconds) });
     }
 
+    /// Transcription voulue (modèle, langue). Sans hésitations ni respirations, celle de Whisper
+    /// est tout de même reprise du cache s'il l'a : la liste des mots reste affichée.
     pub fn wanted_key(&self) -> (String, String) {
-        (WHISPER_HEAD_MODEL.to_string(), self.prefs.language.clone())
+        let model = transcript_model(self.settings.hesitations, self.settings.breaths).unwrap_or(WHISPER_HEAD_MODEL);
+        (model.to_string(), self.prefs.language.clone())
     }
 
     pub fn item(&self, id: u64) -> Option<&Item> {
@@ -745,7 +749,7 @@ impl App {
 
     pub fn refresh_transcript(&mut self, id: u64) {
         let wanted = self.wanted_key();
-        let hesitations_on = self.settings.hesitations;
+        let wanted_on = self.settings.wants_transcript();
         let available = self.hesitations.clone();
         let Some(item) = self.item_mut(id) else { return };
         let Some(analysis) = item.analysis.clone() else { return };
@@ -772,7 +776,7 @@ impl App {
         }
         item.transcript = None;
         item.tr_key = Some(wanted);
-        if !hesitations_on {
+        if !wanted_on {
             item.tr = TrStatus::Off;
             self.transcription_queue.remove(id);
             return;
@@ -1104,7 +1108,8 @@ impl App {
         }
 
         if self.settings != self.applied {
-            let transcript_changed = self.settings.hesitations != self.applied.hesitations;
+            let transcript_changed =
+                self.settings.hesitations != self.applied.hesitations || self.settings.breaths != self.applied.breaths;
             self.applied = self.settings.clone();
             self.plan_dirty = true;
             self.stats_soon();
@@ -1219,7 +1224,7 @@ impl App {
     // export
 
     pub fn export_blockers(&self) -> usize {
-        if !self.settings.hesitations {
+        if !self.settings.wants_transcript() {
             return 0;
         }
         self.items.iter().filter(|i| i.status == Status::Ready && i.tr != TrStatus::Ready).count()
@@ -1276,7 +1281,7 @@ impl App {
         let mut entries: Vec<(&Item, CutPlan)> = Vec::new();
         for item in items {
             let Some(plan) = self.plan_of(item) else { continue };
-            if self.settings.hesitations && item.tr != TrStatus::Ready {
+            if self.settings.wants_transcript() && item.tr != TrStatus::Ready {
                 not_transcribed.push(item.name.clone());
             }
             if plan.levels.low_contrast() {
@@ -1287,13 +1292,19 @@ impl App {
             }
             entries.push((item, plan));
         }
+        let (task, what) = match (self.settings.hesitations, self.settings.breaths) {
+            (true, true) => ("Transcription", "hésitations et respirations"),
+            (true, false) => ("Transcription", "hésitations"),
+            _ => ("Détection des respirations", "respirations"),
+        };
         if not_transcribed.len() == 1 {
-            warnings.insert(0, format!("{} : transcription pas prête, les hésitations n'y sont pas coupées.", not_transcribed[0]));
+            let task = task.to_lowercase();
+            warnings.insert(0, format!("{} : {task} pas prête, les {what} n'y sont pas coupées.", not_transcribed[0]));
         } else if !not_transcribed.is_empty() {
             warnings.insert(
                 0,
                 format!(
-                    "Transcription pas prête pour {} fichiers ({}) : leurs hésitations ne sont pas coupées.",
+                    "{task} pas prête pour {} fichiers ({}) : leurs {what} ne sont pas coupées.",
                     not_transcribed.len(),
                     not_transcribed.join(", ")
                 ),
@@ -1390,6 +1401,7 @@ pub fn stats_of(plan: &CutPlan) -> Stats {
         kept: plan.kept_duration(),
         cuts: union(&plan.removed.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>()).len(),
         hesitations: plan.event_count(Kind::Hesitation),
+        breaths: plan.event_count(Kind::Breath),
         low_contrast: plan.levels.low_contrast(),
         empty: plan.kept.is_empty(),
     }

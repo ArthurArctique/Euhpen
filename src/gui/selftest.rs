@@ -1,6 +1,8 @@
 //! Autotest de l'interface, sans intervention : `EUHPEN_SELFTEST=<dossier>` et
 //! `EUHPEN_SELFTEST_FILES=<fichier>;<fichier>`. L'application charge les fichiers, joue, prend des
 //! captures, exporte puis se ferme. Résultat dans `<dossier>/selftest.log`.
+//! `EUHPEN_SELFTEST_HES` et `EUHPEN_SELFTEST_BREATHS` activent les hésitations et les respirations,
+//! et l'autotest attend alors leur transcription.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -26,7 +28,8 @@ enum Step {
 pub struct SelfTest {
     folder: PathBuf,
     files: Vec<String>,
-    wants_transcript: bool,
+    hesitations: bool,
+    breaths: bool,
     step: Step,
     since: Instant,
     started: bool,
@@ -46,7 +49,8 @@ impl SelfTest {
         Some(SelfTest {
             folder,
             files,
-            wants_transcript: std::env::var_os("EUHPEN_SELFTEST_HES").is_some(),
+            hesitations: std::env::var_os("EUHPEN_SELFTEST_HES").is_some(),
+            breaths: std::env::var_os("EUHPEN_SELFTEST_BREATHS").is_some(),
             step: Step::WaitReady,
             since: Instant::now(),
             started: false,
@@ -88,8 +92,11 @@ impl SelfTest {
             self.started = true;
             let files = self.files.clone();
             app.add_paths(&files, false);
-            if self.wants_transcript {
+            if self.hesitations {
                 app.settings.hesitations = true;
+            }
+            if self.breaths {
+                app.settings.breaths = true;
             }
             self.note(format!("fichiers : {}", self.files.len()));
         }
@@ -103,7 +110,7 @@ impl SelfTest {
                     return;
                 }
                 let proxy_ok = matches!(item.proxy, ProxyStatus::Ready(_));
-                let tr_ok = !self.wants_transcript || item.tr == TrStatus::Ready;
+                let tr_ok = !(self.hesitations || self.breaths) || item.tr == TrStatus::Ready;
                 if let ProxyStatus::Error(message) = &item.proxy {
                     let message = message.clone();
                     self.note(format!("ERREUR aperçu : {message}"));

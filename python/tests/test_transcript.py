@@ -19,8 +19,8 @@ def words(*items):
         ("[UH]", "hesitation"), ("[UM]", "hesitation"), ("[um]", "hesitation"), ("[UH],", "hesitation"),
         ("euh", "hesitation"), ("Euh,", "hesitation"), ("heu...", "hesitation"), ("hum", "hesitation"),
         ("[laughter]", "laugh"), ("[Laughs]", "laugh"), ("[cough]", "cough"), ("[throat_clearing]", "cough"),
-        ("[breath]", "breath"), ("[music]", "event"), ("heureux", "word"), ("humour", "word"),
-        ("Bonjour", "word"), ("tous.", "word"), ("[", "word"),
+        ("[breath]", "breath"), ("[respiration]", "breath"), ("[music]", "event"), ("heureux", "word"),
+        ("humour", "word"), ("Bonjour", "word"), ("tous.", "word"), ("[", "word"),
     ],
 )
 def test_classify(text, kind):

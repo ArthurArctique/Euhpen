@@ -60,8 +60,9 @@ if [ -z "$want_hes" ]; then
   echo "La détection des « euh » utilise Whisper (OpenAI) et une tête entraînée sur le corpus Rhapsodie,"
   echo "sous licence CC BY-NC-SA 3.0 FR : usage non commercial. Elle ajoute environ"
   echo "1,5 Go (PyTorch) ; Whisper est téléchargé au premier usage (1,5 Go)."
+  echo "Elle sert aussi à repérer les respirations (Respiro-en, licence MIT, 35 Mo au premier usage)."
   echo "Sans elle, Euhpen coupe les silences normalement."
-  if ask "Installer la détection des hésitations ?"; then want_hes=1; else want_hes=0; fi
+  if ask "Installer la détection des hésitations et des respirations ?"; then want_hes=1; else want_hes=0; fi
 fi
 
 if [ "$want_hes" = 1 ] && { [ ! -x "$VENV/bin/python" ] || [ "$installed" != "$signature" ]; }; then

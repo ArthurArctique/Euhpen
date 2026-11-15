@@ -1,8 +1,9 @@
 //! Lecture des transcriptions écrites par le processus Python du modèle.
 //!
 //! Whisper donne les mots et leurs horodatages ; la tête entraînée sur du français y ajoute les
-//! hésitations sous forme de jetons entre crochets (`[euh]`, `[étirement]`). Le résultat est mis
-//! en cache, indexé par l'empreinte du fichier, le modèle (avec sa révision) et la langue.
+//! hésitations sous forme de jetons entre crochets (`[euh]`, `[étirement]`), et Respiro-en les
+//! respirations (`[respiration]`). Le résultat est mis en cache, indexé par l'empreinte du
+//! fichier, le modèle (avec sa révision) et la langue.
 
 use crate::cache::{analysis_dir, home_dir, read_json};
 use crate::config::config_dir;
@@ -18,6 +19,13 @@ pub const TRANSCRIPT_VERSION: i64 = 1;
 pub const WHISPER_MODEL: &str = "whisper-turbo";
 pub const HEAD_SUFFIX: &str = "+head";
 pub const WHISPER_HEAD_MODEL: &str = "whisper-turbo+head";
+/// Respirations seules (sans Whisper), ou ajoutées à la transcription d'un autre modèle.
+pub const BREATH_MODEL: &str = "respiro-en";
+pub const BREATH_SUFFIX: &str = "+respiro-en";
+pub const WHISPER_HEAD_BREATH_MODEL: &str = "whisper-turbo+head+respiro-en";
+/// Révision de la détection des respirations, la même que `BREATH_REVISION` de
+/// `python/euhpen/breaths/detect.py` (un test Python le vérifie).
+pub const BREATH_REVISION: &str = "1f4a9b96v1";
 pub const MODEL_REPO: &str = "openai/whisper-large-v3-turbo";
 pub const MODEL_REVISION: &str = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9";
 /// Fichiers sans lesquels transformers ne peut pas charger le modèle.
@@ -34,6 +42,9 @@ pub const MODEL_ATTRIBUTION: &str = "Whisper (OpenAI, licence MIT)";
 pub const HEAD_ATTRIBUTION: &str = "Détection entraînée sur le corpus Rhapsodie (CC BY-NC-SA 3.0 FR)";
 pub const HEAD_LICENSE: &str = "Les poids de la détection sont fournis avec Euhpen sous licence CC BY-NC-SA 3.0 FR : à créditer, sans usage commercial. Whisper n'est pas inclus : il est téléchargé depuis Hugging Face au premier usage.";
 pub const HEAD_LICENSE_URL: &str = "https://creativecommons.org/licenses/by-nc-sa/3.0/fr/";
+pub const BREATH_ATTRIBUTION: &str = "Respiro-en (Dong Yang et al., Interspeech 2024, licence MIT)";
+pub const BREATH_NOTE: &str = "Entraîné sur des livres audio anglais (LibriTTS-R). Téléchargé depuis Hugging Face à la première utilisation (35 Mo).";
+pub const BREATH_URL: &str = "https://github.com/ydqmkkx/Respiro-en";
 
 /// Langues proposées (la langue est toujours passée explicitement au modèle).
 pub const LANGUAGES: [(&str, &str); 24] = [
@@ -73,6 +84,19 @@ pub enum Kind {
     Event,
 }
 
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Word => "word",
+            Kind::Hesitation => "hesitation",
+            Kind::Cough => "cough",
+            Kind::Laugh => "laugh",
+            Kind::Breath => "breath",
+            Kind::Event => "event",
+        }
+    }
+}
+
 /// Fin d'un mot coupé en deux par la tête.
 const WORD_TAIL: &str = "…";
 
@@ -95,7 +119,7 @@ const COUGH_TOKENS: [&str; 11] = [
     "sneezing",
     "toux",
 ];
-const BREATH_TOKENS: [&str; 17] = [
+const BREATH_TOKENS: [&str; 18] = [
     "breath",
     "breathing",
     "breathes",
@@ -113,6 +137,7 @@ const BREATH_TOKENS: [&str; 17] = [
     "smack",
     "click",
     "tsk",
+    "respiration",
 ];
 /// Hésitations écrites comme des mots ordinaires (sans crochets).
 const PLAIN_FILLERS: [&str; 13] =
@@ -222,7 +247,7 @@ impl Transcript {
     /// Seulement avec la tête : elle coupe à l'intérieur des mots, et ce qui reste entre deux
     /// coupes est souvent un mot entier mais bref (« de », « un »).
     pub fn protected_word_centers(&self) -> Vec<f64> {
-        if !self.model.ends_with(HEAD_SUFFIX) {
+        if !uses_head(&self.model) {
             return Vec::new();
         }
         self.words
@@ -293,6 +318,35 @@ pub fn head_revision() -> Option<String> {
     Some(hex[..10].to_string())
 }
 
+/// Le modèle qui écrit la transcription demandée par ces réglages, s'il en faut une.
+pub fn transcript_model(hesitations: bool, breaths: bool) -> Option<&'static str> {
+    match (hesitations, breaths) {
+        (true, false) => Some(WHISPER_HEAD_MODEL),
+        (true, true) => Some(WHISPER_HEAD_BREATH_MODEL),
+        (false, true) => Some(BREATH_MODEL),
+        (false, false) => None,
+    }
+}
+
+/// Les mots viennent-ils de Whisper avec la tête (respirations ajoutées ou non) ?
+pub fn uses_head(model: &str) -> bool {
+    model.strip_suffix(BREATH_SUFFIX).unwrap_or(model).ends_with(HEAD_SUFFIX)
+}
+
+/// Révisions acceptées en cache pour ce modèle (comme `_revision_pattern` côté Python).
+fn revision_pattern(model: &str) -> Option<String> {
+    if model == BREATH_MODEL {
+        return Some(format!("r{BREATH_REVISION}"));
+    }
+    if let Some(base) = model.strip_suffix(BREATH_SUFFIX) {
+        return Some(format!("{}r{BREATH_REVISION}", revision_pattern(base)?));
+    }
+    if model.ends_with(HEAD_SUFFIX) {
+        return Some(format!(r"\w+h{}", head_revision()?));
+    }
+    Some(r"\w+".to_string())
+}
+
 fn safe_model(model: &str) -> String {
     model.chars().map(|c| if c.is_alphanumeric() || matches!(c, '_' | '.' | '-') { c } else { '_' }).collect()
 }
@@ -301,7 +355,7 @@ fn safe_model(model: &str) -> String {
 pub fn cached_transcript(fingerprint: &str, model: &str, language: &str) -> Option<Transcript> {
     let folder = analysis_dir(fingerprint);
     let entries = fs::read_dir(&folder).ok()?;
-    let revision = if model.ends_with(HEAD_SUFFIX) { format!(r"\w+h{}", head_revision()?) } else { r"\w+".to_string() };
+    let revision = revision_pattern(model)?;
     let pattern = format!(
         r"^words-{}-{revision}-{}-v{TRANSCRIPT_VERSION}\.json$",
         regex::escape(&safe_model(model)),
@@ -341,6 +395,7 @@ mod tests {
         assert_eq!(classify("[Laughter]"), Kind::Laugh);
         assert_eq!(classify("[throat_clearing]"), Kind::Cough);
         assert_eq!(classify("[breathing]"), Kind::Breath);
+        assert_eq!(classify("[respiration]"), Kind::Breath);
         assert_eq!(classify("[musique]"), Kind::Event);
     }
 
@@ -361,10 +416,32 @@ mod tests {
         assert!(tr.protected_word_centers().is_empty());
         tr.model = WHISPER_HEAD_MODEL.into();
         assert_eq!(tr.protected_word_centers(), vec![1.5]);
+        tr.model = WHISPER_HEAD_BREATH_MODEL.into();
+        assert_eq!(tr.protected_word_centers(), vec![1.5]);
+        tr.model = BREATH_MODEL.into();
+        assert!(tr.protected_word_centers().is_empty());
+    }
+
+    #[test]
+    fn modele_selon_les_reglages() {
+        assert_eq!(transcript_model(false, false), None);
+        assert_eq!(transcript_model(true, false), Some(WHISPER_HEAD_MODEL));
+        assert_eq!(transcript_model(false, true), Some(BREATH_MODEL));
+        assert_eq!(transcript_model(true, true), Some(WHISPER_HEAD_BREATH_MODEL));
+        assert_eq!(WHISPER_HEAD_BREATH_MODEL, format!("{WHISPER_HEAD_MODEL}{BREATH_SUFFIX}"));
+        assert!(uses_head(WHISPER_HEAD_BREATH_MODEL) && !uses_head(BREATH_MODEL) && !uses_head(WHISPER_MODEL));
+    }
+
+    #[test]
+    fn revisions_en_cache() {
+        assert_eq!(revision_pattern(BREATH_MODEL).as_deref(), Some("r1f4a9b96v1"));
+        assert_eq!(revision_pattern("whisper-turbo+respiro-en").as_deref(), Some(r"\w+r1f4a9b96v1"));
+        assert_eq!(revision_pattern(WHISPER_MODEL).as_deref(), Some(r"\w+"));
     }
 
     #[test]
     fn nom_de_fichier_du_modele() {
         assert_eq!(safe_model(WHISPER_HEAD_MODEL), "whisper-turbo_head");
+        assert_eq!(safe_model(WHISPER_HEAD_BREATH_MODEL), "whisper-turbo_head_respiro-en");
     }
 }

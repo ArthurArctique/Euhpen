@@ -1,4 +1,9 @@
-Euhpen coupe les silences et les hésitations d'un rush à une seule voix, sur votre ordinateur, et exporte une timeline XML pour Premiere Pro ou DaVinci Resolve. Vos fichiers d'origine ne sont jamais modifiés.
+Euhpen coupe les silences, les hésitations et les respirations d'un rush à une seule voix, sur votre ordinateur, et exporte une timeline XML pour Premiere Pro ou DaVinci Resolve. Vos fichiers d'origine ne sont jamais modifiés.
+
+## Nouveautés de la version 0.2.0
+
+- **Coupe des respirations**, optionnelle : activez « Respirations » dans l'interface, ou ajoutez `--breaths` en ligne de commande. Elle repose sur Respiro-en (Dong Yang et al., licence MIT) et se passe de Whisper ; son modèle (35 Mo) est téléchargé à la première détection.
+- Ce modèle a été entraîné par ses auteurs sur des livres audio anglais. La coupe des respirations n'a été essayée que sur Mac pour l'instant.
 
 ## Télécharger
 
@@ -18,4 +23,4 @@ Ces installateurs ne sont pas signés par un certificat payant.
 
 `SHA256SUMS.txt` donne l'empreinte de chaque fichier.
 
-La tête de détection des hésitations est sous licence CC BY-NC-SA 3.0 FR : pas d'usage commercial.
+La tête de détection des hésitations est sous licence CC BY-NC-SA 3.0 FR : pas d'usage commercial. La détection des respirations (Respiro-en, licence MIT) n'est pas concernée.

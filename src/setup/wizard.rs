@@ -321,8 +321,8 @@ impl Wizard {
             ui.label(theme::hint(text));
         });
         component(ui, |ui| {
-            ui.checkbox(&mut self.hesitations, RichText::new("Détection des « euh »").strong());
-            ui.label(theme::hint("Repère les hésitations avec Whisper (OpenAI) et une tête de détection entraînée sur le corpus Rhapsodie. Sans elle, Euhpen coupe les silences normalement."));
+            ui.checkbox(&mut self.hesitations, RichText::new("Détection des « euh » et des respirations").strong());
+            ui.label(theme::hint("Repère les hésitations avec Whisper (OpenAI) et une tête de détection entraînée sur le corpus Rhapsodie, et les respirations avec Respiro-en (licence MIT). Sans elle, Euhpen coupe les silences normalement."));
             ui.label(RichText::new("Licence de la tête : CC BY-NC-SA 3.0 FR, pas d'usage commercial. En cochant cette case, vous acceptez cette condition.").small().color(theme::WARN));
             if !self.hesitations {
                 return;
@@ -417,7 +417,7 @@ impl Wizard {
         ui.add_space(10.0);
         let report = self.report.clone();
         if !report.hesitations {
-            message_card(ui, theme::MUTED, "Coupe des silences prête", "La détection des « euh » n'est pas installée. Relancez l'installateur pour l'ajouter.");
+            message_card(ui, theme::MUTED, "Coupe des silences prête", "La détection des « euh » et des respirations n'est pas installée. Relancez l'installateur pour l'ajouter.");
         } else if let Some(card) = &report.cuda {
             message_card(ui, theme::ACCENT, "La carte graphique sera utilisée", &format!("{card} répond à PyTorch {} : la transcription passera par CUDA.", report.torch.as_deref().unwrap_or("")));
         } else if report.mps {

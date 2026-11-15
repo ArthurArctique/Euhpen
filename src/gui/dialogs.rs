@@ -10,7 +10,10 @@ use crate::cache::cache_dir;
 use crate::cli::duration_text;
 use crate::config::config_dir;
 use crate::files::reveal;
-use crate::transcript::{local_model_path, HEAD_ATTRIBUTION, HEAD_LICENSE, HEAD_LICENSE_URL, MODEL_ATTRIBUTION, MODEL_LABEL};
+use crate::transcript::{
+    local_model_path, BREATH_ATTRIBUTION, BREATH_NOTE, BREATH_URL, HEAD_ATTRIBUTION, HEAD_LICENSE, HEAD_LICENSE_URL,
+    MODEL_ATTRIBUTION, MODEL_LABEL,
+};
 use crate::worker::worker_log_path;
 
 use super::state::{App, Dialog, ExportResult, ToastKind};
@@ -110,12 +113,15 @@ impl App {
 
     fn export_confirm(&mut self, ui: &mut Ui, count: usize) -> bool {
         ui.set_width(380.0);
-        ui.heading("Transcriptions pas prêtes");
+        let hesitations = self.settings.hesitations;
+        let what = if self.settings.breaths && hesitations { "hésitations et respirations" } else { "hésitations" };
+        ui.heading(if hesitations { "Transcriptions pas prêtes" } else { "Détection pas prête" });
         ui.add_space(4.0);
-        let text = if count == 1 {
-            "Un fichier n'a pas encore de transcription : ses hésitations ne seront pas coupées.".to_string()
-        } else {
-            format!("{count} fichiers n'ont pas encore de transcription : leurs hésitations ne seront pas coupées.")
+        let text = match (hesitations, count) {
+            (true, 1) => format!("Un fichier n'a pas encore de transcription : ses {what} ne seront pas coupées."),
+            (true, n) => format!("{n} fichiers n'ont pas encore de transcription : leurs {what} ne seront pas coupées."),
+            (false, 1) => "Les respirations d'un fichier ne sont pas encore détectées : elles ne seront pas coupées.".to_string(),
+            (false, n) => format!("Les respirations de {n} fichiers ne sont pas encore détectées : elles ne seront pas coupées."),
         };
         ui.add(egui::Label::new(RichText::new(text).color(theme::MUTED)).wrap());
         ui.add_space(12.0);
@@ -218,10 +224,10 @@ impl App {
             }
             match &self.hesitations {
                 None => {
-                    ui.label(hint("Hésitations : vérification…"));
+                    ui.label(hint("Hésitations et respirations : vérification…"));
                 }
                 Some(Ok(())) => {
-                    ui.label(hint("Hésitations : installées"));
+                    ui.label(hint("Hésitations et respirations : installées"));
                 }
                 Some(Err(message)) => {
                     ui.add(egui::Label::new(RichText::new(message).small().color(theme::WARN)).wrap());
@@ -276,6 +282,8 @@ impl App {
             ui.add(egui::Label::new(hint(MODEL_ATTRIBUTION)).wrap());
             ui.add(egui::Label::new(hint(HEAD_ATTRIBUTION)).wrap());
             ui.hyperlink_to(RichText::new(HEAD_LICENSE).small(), HEAD_LICENSE_URL);
+            ui.add(egui::Label::new(hint(format!("Respirations : {BREATH_ATTRIBUTION}. {BREATH_NOTE}"))).wrap());
+            ui.hyperlink_to(RichText::new(BREATH_URL).small(), BREATH_URL);
         });
         ui.add_space(10.0);
         let mut close = false;
